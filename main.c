@@ -20,6 +20,9 @@
 #define KISS_DATA_FRAME 0x00
 
 #define CDI_HEADER_SIZE 8
+#define CDI_FOOTER_SIZE 2
+#define CDI_OVERHEAD (CDI_HEADER_SIZE + CDI_FOOTER_SIZE)
+#define CDI_CMD_TRANSMIT 0x1003
 
 #define SUCCESS 0
 #define ERR_BUFFER_FULL 1
@@ -135,8 +138,13 @@ int cdi_verify_checksum(buffer* b, uint32_t start, uint32_t size,
 }
 
 uint16_t cdi_payload_size(buffer* b) {
-  uint16_t size_msb = buffer_at(b, 3);
-  return (size_msb << 8) + buffer_at(b, 4);
+  uint16_t size_msb = buffer_at(b, 4);
+  return (size_msb << 8) + buffer_at(b, 5);
+}
+
+uint16_t cdi_command_type(buffer* b) {
+  uint16_t command_msb = buffer_at(b, 2);
+  return (command_msb << 8) + buffer_at(b, 3);
 }
 
 int cdi_check_packet(buffer* b) {
@@ -241,10 +249,15 @@ int main(int argc, char *argv[]) {
     buffer_add(&lithium_recv_buffer, tmp_buffer, num_b_read);
 
     if(cdi_check_packet(&lithium_recv_buffer)) {
-      kiss_write_ax25_header(&kiss_send_buffer);
-      kiss_write_ax25_payload(&kiss_send_buffer, &lithium_recv_buffer);
-      kiss_write_buffer(fd_kiss, &kiss_send_buffer);
-      buffer_clear(&kiss_send_buffer);
+      if(cdi_command_type(&lithium_recv_buffer) == CDI_CMD_TRANSMIT) {
+        kiss_write_ax25_header(&kiss_send_buffer);
+        kiss_write_ax25_payload(&kiss_send_buffer, &lithium_recv_buffer);
+        kiss_write_buffer(fd_kiss, &kiss_send_buffer);
+        buffer_clear(&kiss_send_buffer);
+      }
+
+      uint32_t payload_size = cdi_payload_size(&lithium_recv_buffer);
+      buffer_remove(&lithium_recv_buffer, CDI_OVERHEAD + payload_size);
     }
   }
 
