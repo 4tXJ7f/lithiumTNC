@@ -72,6 +72,7 @@ uint32_t buffer_capacity(buffer* b) {
 
 int buffer_add(buffer* b, uint8_t* data, uint32_t size) {
   if(b->size + size > BUFFER_SIZE) {
+    printf("Error: Buffer full\n");
     return ERR_BUFFER_FULL;
   }
 
@@ -122,6 +123,8 @@ void kiss_write_buffer(int fd, buffer* b) {
   }
 
   kiss_write_char(fd, KISS_FEND);
+
+  printf("Sent KISS frame\n");
 }
 
 int cdi_verify_checksum(buffer* b, uint32_t start, uint32_t size,
@@ -134,6 +137,7 @@ int cdi_verify_checksum(buffer* b, uint32_t start, uint32_t size,
     chk_b += chk_a;
   }
 
+  printf("%u %u %u %u\n", chk_a, chk_b, ex_chk_a, ex_chk_b);
   return (chk_a == ex_chk_a) && (chk_b == ex_chk_b);
 }
 
@@ -158,24 +162,28 @@ int cdi_check_packet(buffer* b) {
     return false;
   }
 
+  printf("%c %c\n", buffer_at(b, 0), buffer_at(b, 1));
+  printf("%u %u\n", buffer_at(b, 2), buffer_at(b, 3));
+  printf("%u %u\n", buffer_at(b, 4), buffer_at(b, 5));
+
   // Check header checksum
   uint8_t h_chk_a = buffer_at(b, 6);
   uint8_t h_chk_b = buffer_at(b, 7);
-  if(!cdi_verify_checksum(b, 0, CDI_HEADER_SIZE, h_chk_a, h_chk_b)) {
-    printf("Wrong header checksum\n");
+  if(!cdi_verify_checksum(b, 2, CDI_HEADER_SIZE - 4, h_chk_a, h_chk_b)) {
+    printf("Warning: Wrong header checksum\n");
     return false;
   }
 
   uint16_t size = cdi_payload_size(b);
-  if(b->size < 10 + size) {
+  if(b->size < CDI_OVERHEAD + size) {
     return false;
   }
 
-  uint8_t p_chk_a = b->buffer[CDI_HEADER_SIZE + size];
-  uint8_t p_chk_b = b->buffer[CDI_HEADER_SIZE + size + 1];
-  if(!cdi_verify_checksum(b, CDI_HEADER_SIZE, size, p_chk_a, p_chk_b)) {
-    printf("Wrong checksum\n");
-    return false;
+  uint8_t p_chk_a = buffer_at(b, CDI_HEADER_SIZE + size);
+  uint8_t p_chk_b = buffer_at(b, CDI_HEADER_SIZE + size + 1);
+  if(!cdi_verify_checksum(b, 2, CDI_HEADER_SIZE + size - 4, p_chk_a, p_chk_b)) {
+    printf("Warning: Wrong checksum\n");
+    //return false;
   }
 
   return true;
@@ -227,10 +235,15 @@ void config_port(int fd) {
 }
 
 int main(int argc, char *argv[]) {
-  int fd_kiss = open("/dev/ttyf1", O_RDWR | O_NOCTTY | O_NDELAY);
-  int fd_lithium = open("/dev/ttyf1", O_RDWR | O_NOCTTY | O_NDELAY);
-  if(fd_kiss == -1 || fd_lithium == -1) {
-    perror("Unable to open serial port");
+  int fd_kiss = open("/dev/ttyS2", O_RDWR | O_NOCTTY | O_NDELAY);
+  if(fd_kiss == -1) {
+    perror("Unable to open serial port (kiss)");
+    return -1;
+  }
+
+  int fd_lithium = open("/dev/ttyS1", O_RDWR | O_NOCTTY | O_NDELAY);
+  if(fd_lithium == -1) {
+    perror("Unable to open serial port (lithium)");
     return -1;
   }
 
@@ -246,6 +259,7 @@ int main(int argc, char *argv[]) {
   while(true) {
     uint16_t capacity = buffer_capacity(&lithium_recv_buffer);
     int num_b_read = read(fd_lithium, tmp_buffer, capacity);
+
     buffer_add(&lithium_recv_buffer, tmp_buffer, num_b_read);
 
     if(cdi_check_packet(&lithium_recv_buffer)) {
