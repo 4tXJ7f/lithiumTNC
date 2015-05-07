@@ -39,8 +39,8 @@ buffer kiss_recv_buffer;
 buffer lithium_send_buffer;
 buffer lithium_recv_buffer;
 
-uint8_t dest_addr[] = { 0xA2, 0x84, 0x6A, 0x60, 0xA8, 0xA6, 0x7C };
-uint8_t src_addr[] = { 0xA2, 0x84, 0x6A, 0x60, 0xA8, 0xA6, 0x63 };
+uint8_t dest_addr[] = { 'O' << 1, 'N' << 1, '0' << 1, '4' << 1, 'U' << 1, 'S' << 1, 0x7C };
+uint8_t src_addr[] = { 'O' << 1, 'N' << 1, '0' << 1, '4' << 1, 'U' << 1, 'S' << 1, 0x63 };
 
 uint8_t ax25_control_bits = 0x03;
 uint8_t ax25_protocol_ident = 0xF0;
@@ -58,8 +58,9 @@ void buffer_clear(buffer* b) {
 }
 
 void buffer_remove(buffer* b, uint32_t size) {
+  printf("buffer remove %u %u %u\n", b->offset, b->size, size);
   b->offset = (b->offset + size) % BUFFER_SIZE;
-  b->size = 0;
+  b->size -= size;
 }
 
 uint8_t buffer_at(buffer* b, uint32_t i) {
@@ -76,6 +77,8 @@ int buffer_add(buffer* b, uint8_t* data, uint32_t size) {
     return ERR_BUFFER_FULL;
   }
 
+  printf("XXX%u %u %u\n", b->offset, b->size, size);
+
   for(uint32_t i = 0; i < size; i++) {
     b->buffer[(b->offset + b->size + i) % BUFFER_SIZE] = data[i];
   }
@@ -86,6 +89,7 @@ int buffer_add(buffer* b, uint8_t* data, uint32_t size) {
 
 int buffer_copy(buffer* dest, buffer* src, uint32_t start, uint32_t size) {
   if(dest->size + size > BUFFER_SIZE) {
+    printf("Error: Buffer full\n");
     return ERR_BUFFER_FULL;
   }
 
@@ -99,6 +103,7 @@ int buffer_copy(buffer* dest, buffer* src, uint32_t start, uint32_t size) {
 }
 
 void kiss_write_char(int fd, uint8_t c) {
+  printf("%02x ", c);
   write(fd, &c, 1);
 }
 
@@ -124,7 +129,7 @@ void kiss_write_buffer(int fd, buffer* b) {
 
   kiss_write_char(fd, KISS_FEND);
 
-  printf("Sent KISS frame\n");
+  printf("\nSent KISS frame\n");
 }
 
 int cdi_verify_checksum(buffer* b, uint32_t start, uint32_t size,
@@ -137,7 +142,6 @@ int cdi_verify_checksum(buffer* b, uint32_t start, uint32_t size,
     chk_b += chk_a;
   }
 
-  printf("%u %u %u %u\n", chk_a, chk_b, ex_chk_a, ex_chk_b);
   return (chk_a == ex_chk_a) && (chk_b == ex_chk_b);
 }
 
@@ -159,12 +163,9 @@ int cdi_check_packet(buffer* b) {
 
   // Check sync chars
   if(!(buffer_at(b, 0) == 'H' && buffer_at(b, 1) == 'e')) {
+    printf("Error: Sync chars invalid\n");
     return false;
   }
-
-  printf("%c %c\n", buffer_at(b, 0), buffer_at(b, 1));
-  printf("%u %u\n", buffer_at(b, 2), buffer_at(b, 3));
-  printf("%u %u\n", buffer_at(b, 4), buffer_at(b, 5));
 
   // Check header checksum
   uint8_t h_chk_a = buffer_at(b, 6);
@@ -176,12 +177,13 @@ int cdi_check_packet(buffer* b) {
 
   uint16_t size = cdi_payload_size(b);
   if(b->size < CDI_OVERHEAD + size) {
+    printf("Waiting for the rest of the packet %u %u", CDI_OVERHEAD + size, b->size);
     return false;
   }
 
   uint8_t p_chk_a = buffer_at(b, CDI_HEADER_SIZE + size);
   uint8_t p_chk_b = buffer_at(b, CDI_HEADER_SIZE + size + 1);
-  if(!cdi_verify_checksum(b, 2, CDI_HEADER_SIZE + size - 4, p_chk_a, p_chk_b)) {
+  if(!cdi_verify_checksum(b, 2, CDI_HEADER_SIZE + size - 2, p_chk_a, p_chk_b)) {
     printf("Warning: Wrong checksum\n");
     //return false;
   }
@@ -271,6 +273,7 @@ int main(int argc, char *argv[]) {
       }
 
       uint32_t payload_size = cdi_payload_size(&lithium_recv_buffer);
+      printf("%u\n", payload_size);
       buffer_remove(&lithium_recv_buffer, CDI_OVERHEAD + payload_size);
     }
   }
