@@ -9,7 +9,7 @@
 
 #define NELEMS(x)  (sizeof(x) / sizeof(x[0]))
 
-#define BUFFER_SIZE 300
+#define BUFFER_SIZE 200
 
 #define AX25_ADDR_SIZE 7
 
@@ -100,6 +100,14 @@ int buffer_copy(buffer* dest, buffer* src, uint32_t start, uint32_t size) {
 
   dest->size += size;
   return SUCCESS;
+}
+
+void buffer_print(buffer* b) {
+  printf("Buffer content:\n");
+  for(uint32_t i = 0; i < b->size; i++) {
+    printf("%02x ", buffer_at(b, i));
+  }
+  printf("\n");
 }
 
 void kiss_write_char(int fd, uint8_t c) {
@@ -225,6 +233,9 @@ void config_port(int fd) {
   // Disable hardware flow control
   options.c_cflag &= ~CRTSCTS;
 
+  // Disable software flow control
+  options.c_iflag &= ~(IXON | IXOFF | IXANY);
+
   // Raw input
   options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
 
@@ -265,6 +276,7 @@ int main(int argc, char *argv[]) {
     buffer_add(&lithium_recv_buffer, tmp_buffer, num_b_read);
 
     if(cdi_check_packet(&lithium_recv_buffer)) {
+      buffer_print(&lithium_recv_buffer);
       if(cdi_command_type(&lithium_recv_buffer) == CDI_CMD_TRANSMIT) {
         kiss_write_ax25_header(&kiss_send_buffer);
         kiss_write_ax25_payload(&kiss_send_buffer, &lithium_recv_buffer);
@@ -275,6 +287,7 @@ int main(int argc, char *argv[]) {
       uint32_t payload_size = cdi_payload_size(&lithium_recv_buffer);
       printf("%u\n", payload_size);
       buffer_remove(&lithium_recv_buffer, CDI_OVERHEAD + payload_size);
+      buffer_print(&lithium_recv_buffer);
     }
   }
 
