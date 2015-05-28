@@ -6,6 +6,9 @@
 #include <termios.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <math.h>
+#include <sys/types.h>
+#include <sys/select.h>
 
 #define NELEMS(x)  (sizeof(x) / sizeof(x[0]))
 
@@ -58,7 +61,6 @@ void buffer_clear(buffer* b) {
 }
 
 void buffer_remove(buffer* b, uint32_t size) {
-  printf("buffer remove %u %u %u\n", b->offset, b->size, size);
   b->offset = (b->offset + size) % BUFFER_SIZE;
   b->size -= size;
 }
@@ -76,8 +78,6 @@ int buffer_add(buffer* b, uint8_t* data, uint32_t size) {
     printf("Error: Buffer full\n");
     return ERR_BUFFER_FULL;
   }
-
-  printf("XXX%u %u %u\n", b->offset, b->size, size);
 
   for(uint32_t i = 0; i < size; i++) {
     b->buffer[(b->offset + b->size + i) % BUFFER_SIZE] = data[i];
@@ -111,7 +111,6 @@ void buffer_print(buffer* b) {
 }
 
 void kiss_write_char(int fd, uint8_t c) {
-  printf("%02x ", c);
   write(fd, &c, 1);
 }
 
@@ -185,7 +184,6 @@ int cdi_check_packet(buffer* b) {
 
   uint16_t size = cdi_payload_size(b);
   if(b->size < CDI_OVERHEAD + size) {
-    printf("Waiting for the rest of the packet %u %u", CDI_OVERHEAD + size, b->size);
     return false;
   }
 
@@ -263,6 +261,9 @@ int main(int argc, char *argv[]) {
   config_port(fd_kiss);
   config_port(fd_lithium);
 
+  int max_fd = (fd_kiss > fd_lithium ? fd_kiss : fd_lithium) + 1;
+  fd_set input;
+
   kiss_write_ax25_header(&kiss_send_buffer);
   buffer_add(&kiss_send_buffer, ax25_test_payload, NELEMS(ax25_test_payload));
   kiss_write_buffer(fd_kiss, &kiss_send_buffer);
@@ -270,24 +271,29 @@ int main(int argc, char *argv[]) {
 
   uint8_t tmp_buffer[BUFFER_SIZE];
   while(true) {
-    uint16_t capacity = buffer_capacity(&lithium_recv_buffer);
-    int num_b_read = read(fd_lithium, tmp_buffer, capacity);
+    FD_ZERO(&input);
+    FD_SET(fd_kiss, &input);
+    FD_SET(fd_lithium, &input);
+    select(max_fd, &input, NULL, NULL, NULL);
 
-    buffer_add(&lithium_recv_buffer, tmp_buffer, num_b_read);
+    if(FD_ISSET(fd_lithium, &input)) {
+      uint16_t capacity = buffer_capacity(&lithium_recv_buffer);
+      int num_b_read = read(fd_lithium, tmp_buffer, capacity);
 
-    if(cdi_check_packet(&lithium_recv_buffer)) {
-      buffer_print(&lithium_recv_buffer);
-      if(cdi_command_type(&lithium_recv_buffer) == CDI_CMD_TRANSMIT) {
-        kiss_write_ax25_header(&kiss_send_buffer);
-        kiss_write_ax25_payload(&kiss_send_buffer, &lithium_recv_buffer);
-        kiss_write_buffer(fd_kiss, &kiss_send_buffer);
-        buffer_clear(&kiss_send_buffer);
+      buffer_add(&lithium_recv_buffer, tmp_buffer, num_b_read);
+
+      if(cdi_check_packet(&lithium_recv_buffer)) {
+	buffer_print(&lithium_recv_buffer);
+	if(cdi_command_type(&lithium_recv_buffer) == CDI_CMD_TRANSMIT) {
+	  kiss_write_ax25_header(&kiss_send_buffer);
+	  kiss_write_ax25_payload(&kiss_send_buffer, &lithium_recv_buffer);
+	  kiss_write_buffer(fd_kiss, &kiss_send_buffer);
+	  buffer_clear(&kiss_send_buffer);
+	}
+
+	uint32_t payload_size = cdi_payload_size(&lithium_recv_buffer);
+	buffer_remove(&lithium_recv_buffer, CDI_OVERHEAD + payload_size);
       }
-
-      uint32_t payload_size = cdi_payload_size(&lithium_recv_buffer);
-      printf("%u\n", payload_size);
-      buffer_remove(&lithium_recv_buffer, CDI_OVERHEAD + payload_size);
-      buffer_print(&lithium_recv_buffer);
     }
   }
 
